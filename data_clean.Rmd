@@ -10,21 +10,45 @@ library(tidyverse)
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+Import and clean raw data
+
 ```{r}
-crash_df = read_csv("./data/crash_20251031_filtered.csv", na = c("Unspecified", "Does Not Apply", "Unknown", "NA", ".", "")) |> 
+crash_df = read_csv("./data/Motor_Vehicle_Collisions_-_Crashes_20251031.csv", na = c("Unspecified", "Does Not Apply", "Unknown", "NA", ".", "")) |> 
+  janitor::clean_names() |> 
+  # Keep only Manhattan records
+  filter(borough == "MANHATTAN") |>
+  
+  # Separate the crash_date column (creates character columns)
+  separate(
+    crash_date,
+    into = c("month", "day", "year"),
+    sep = "/"
+  ) |> 
+  mutate(year = as.numeric(year),
+         month = as.numeric(month),
+         day = as.numeric(day)) |>
+  # keep data from Jan 1, 2021 up to October 31, 2025. 
+  filter(
+    year %in% 2021:2025 &
+    !(year == 2025 & month == 11),
+  ) |> 
+  relocate(year, month, day, crash_time, collision_id) |> 
   select(-location, -borough, -starts_with("contributing_factor"), -starts_with("vehicle_type"))
 ```
 
 
 ```{r}
-person_df = read_csv("./data/person_20251031_filtered.csv", na = c("Unspecified", "Does Not Apply", "Unknown", "NA", ".", "")) |> 
-  select(-unique_id, -crash_date, -crash_time, -person_injury, -vehicle_id, -emotional_status, -bodily_injury, -position_in_vehicle, -ped_location, -ped_action, -complaint, -starts_with("contributing_factor")) |> 
-  filter(ped_role %in% c("Driver", "In-Line Skater", "Passenger", "Pedestrian"))
+person_df = read_csv("./data/Motor_Vehicle_Collisions_-_Person_20251031.csv", na = c("Unspecified", "Does Not Apply", "Unknown", "NA", ".", "")) |> 
+  janitor::clean_names() |> 
+  select(collision_id, person_id, person_type, person_age, ejection, safety_equipment, ped_role, person_sex) |> 
+  filter(ped_role %in% c("Driver", "Passenger", "Pedestrian"))
 ```
 
 
 ```{r}
-vehicle_df = read_csv("./data/vehicle_20251031_filtered.csv", na = c("Unspecified", "Does Not Apply", "Unknown", "NA", ".", "")) 
+vehicle_df = read_csv("./data/Motor_Vehicle_Collisions_-_Vehicles_20251031.csv", na = c("Unspecified", "Does Not Apply", "Unknown", "NA", ".", "")) |> 
+  janitor::clean_names() |> 
+  select(collision_id, vehicle_id, vehicle_type, vehicle_year, driver_license_status, driver_license_jurisdiction)
 
 ```
 
