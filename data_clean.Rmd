@@ -7,7 +7,22 @@ output: html_document
 
 ```{r setup, include=FALSE}
 library(tidyverse)
-knitr::opts_chunk$set(echo = TRUE)
+library(leaflet)
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%"
+)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
 ```
 
 Import and clean raw data
@@ -27,16 +42,22 @@ crash_df = read_csv("./data/Motor_Vehicle_Collisions_-_Crashes_20251031.csv", na
   mutate(year = as.numeric(year),
          month = as.numeric(month),
          day = as.numeric(day),
+         hour = hour(crash_time),
          num_injured = number_of_pedestrians_injured + number_of_cyclist_injured + number_of_motorist_injured,
-         num_killed = number_of_pedestrians_killed + number_of_cyclist_killed + number_of_motorist_killed) |>
+         num_killed = number_of_pedestrians_killed + number_of_cyclist_killed + number_of_motorist_killed,
+         num_casualty = num_injured + num_killed,
+         crash_date_full = make_date(year, month, day), 
+         day_of_week = wday(crash_date_full, label = TRUE, abbr = FALSE)
+         ) |>
   # keep data from Jan 1, 2021 up to October 31, 2025. 
   filter(
     year %in% 2021:2025 &
     !(year == 2025 & month == 11),
   ) |> 
-  relocate(year, month, day, crash_time, collision_id) |> 
+  relocate(collision_id, year, month, day, hour, day_of_week) |> 
   # keep predictors of interests
-  select(-location, -borough, -starts_with("contributing_factor"), -starts_with("vehicle_type"), -starts_with("number_of"))
+  select(-location, -borough, -crash_time,- crash_date_full, -starts_with("contributing_factor"), -starts_with("vehicle_type"), -starts_with("number_of")) |> 
+  arrange(year, month, day, hour)
 ```
 
 
@@ -45,7 +66,7 @@ person_df = read_csv("./data/Motor_Vehicle_Collisions_-_Person_20251031.csv", na
   janitor::clean_names() |> 
   # keep predictors of interests
   select(collision_id, unique_id, vehicle_id, person_type, person_age, ejection, safety_equipment, ped_role, person_sex) |> 
-  # keep 3 kinds of main role of interests, which account for 99% person ("registrant" duplicates "driver" most the time)
+  # keep 3 kinds of main categories of person_role, which account for 99% cases ("registrant" duplicates "driver" most the time)
   filter(ped_role %in% c("Driver", "Passenger", "Pedestrian")) |> 
   # use reasonable names
   rename(person_role = ped_role,
@@ -65,11 +86,88 @@ vehicle_df = read_csv("./data/Motor_Vehicle_Collisions_-_Vehicles_20251031.csv",
 ```
 
 
+Join the three datasets
+
 ```{r}
 collision_df <- crash_df |> 
   left_join(vehicle_df, by = "collision_id") |> 
-  left_join(person_df, by = c("collision_id", "vehicle_id"))
+  # use vehicle_id to assign vehicle information to each person
+  left_join(person_df, by = c("collision_id", "vehicle_id")) |> 
+# each row has information for each involved vehicle with each person's information
+  mutate(
+    severity = case_when(
+      num_killed > 0 ~ "severe",
+      num_injured > 0 ~ "medium",
+      TRUE ~ "minor"
+    )
+  )
 
-write_csv(collision_df, "./data/collision_df")
+write_csv(collision_df, "./data/collision_df.csv")
+```
+
+
+```{r}
+
+pal <- colorNumeric(
+  palette = "Blues",
+  domain = 0:5
+)
+
+collision_df |> 
+  select(collision_id, latitude, longitude, num_casualty, crash_time) |> 
+  distinct(collision_id, .keep_all = TRUE) |> 
+  mutate(
+    labels = str_c("<b> Crash time: ", crash_time, "</b>", 
+               "<br>Number of injured or killed: ", 
+               num_casualty, 
+               sep = "")
+         ) |> 
+  filter(num_casualty > 0 & num_casualty < 6 &
+            latitude < 41 & latitude > 40 & 
+            longitude < -73 & longitude > -75) |> 
+  leaflet() |> 
+  addProviderTiles(providers$CartoDB.Positron) |>  
+  addLegend("bottomright", pal = pal, values = ~num_casualty,
+    title = "Person Casualties",
+    opacity = 1
+  ) |> 
+  addCircleMarkers(
+    ~longitude, ~latitude,
+    color = ~pal(num_casualty),
+    radius = 1,
+    popup = ~labels) 
+
+```
+
+Use geom_bin2d to create a 2D histogram/heatmap.
+
+```{r}
+LAT_MIN <- 40.701134
+LAT_MAX <- 40.87302
+LON_MIN <- -74.01798
+LON_MAX <- -73.9111
+
+manhattan_heatmap =
+  collision_df |>
+  select(collision_id, latitude, longitude, num_casualty, crash_time) |> 
+  distinct(collision_id, .keep_all = TRUE) |> 
+  filter(
+    latitude >= LAT_MIN, latitude <= LAT_MAX,
+    longitude >= LON_MIN, longitude <= LON_MAX
+  ) |>
+  ggplot(aes(x = longitude, y = latitude, weight = num_casualty)) +
+  
+  geom_density_2d_filled(alpha = 0.8) +
+  scale_fill_viridis_d(option = "C", name = "Collision Casualty Density") +
+  coord_cartesian(xlim = c(LON_MIN, LON_MAX), ylim = c(LAT_MIN, LAT_MAX)) +
+    labs(
+    title = "Heatmap of Collision Casualties in Manhattan (2021-2025)",
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+manhattan_heatmap
 ```
 
